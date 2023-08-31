@@ -1,0 +1,105 @@
+name: Check firmware update
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 12 * * *"
+  push:
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - model: "a52q"
+          - model: "m52xq"
+          - model: "a52sxq"
+          - model: "a71"
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+        with:
+          submodules: true
+
+      - name: Clone NcX OTA repo
+        uses: actions/checkout@v2
+        with:
+          repository: ShaDisNX255/NcX_OnUpdate
+          path: NcX
+          ref: main
+
+      - name: Install dependencies
+        if: env.need_update == 1
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y 7zip wget coreutils grep sed
+
+      - name: Compare latest version with current version
+        run: |
+          need_update=0
+          latest=`cat NcX/${{ matrix.model }}/manifest.xml  | grep VersionName | sed 's/  <VersionName>//' | sed 's/ Update<\/VersionName>//'`
+          current=`cat current.${{ matrix.model }}` || need_update=1
+          [[ $latest != $current ]] && need_update=1
+          echo "latest_version=$latest" >> $GITHUB_ENV
+          echo "need_update=$need_update" >> $GITHUB_ENV
+          echo NcX version: ${{ matrix.model }} $latest > versions.txt
+
+      - name: Fetch firmware
+        if: env.need_update == 1
+        run: |
+          cat NcX/${{ matrix.model }}/manifest.xml  | grep DownloadURL | sed 's/  <DownloadURL>//' | sed 's/<\/DownloadURL>//' > link.txt
+          dl=`cat link.txt`
+          wget --wait=600 -T 15 -c $dl
+      
+      - name: Split zip
+        if: env.need_update == 1
+        run: |
+          file_name='*.zip'
+          echo $file_name > filename.txt
+          file=`cat filename.txt | sed 's/OTA-//'`
+          7z a -tzip -v1000M NcX_$file $file_name
+
+      - name: Cleanup space
+        if: env.need_update == 1
+        run: |
+          sudo apt-get remove --purge -y "php*" "dotnet*" "mysql*" "nodejs*" "clang*" "google*"
+          sudo apt-get autoremove -y
+          sudo apt-get clean
+          sudo rm -rf /usr/local
+
+      - name: Update current version
+        if: env.need_update == 1
+        run: |
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git pull origin ${{github.ref}} --ff-only
+          echo ${{ env.latest_version }} > current.${{ matrix.model }}
+          git add current.${{ matrix.model }}
+          git commit -m "${{ matrix.model }}: ${{ env.latest_version }}"
+          git tag "${{ env.latest_version }}-${{ matrix.model }}"
+
+      - name: Push changes to repo
+        if: env.need_update == 1
+        uses: ad-m/github-push-action@master
+        with:
+          tags: true
+          github_token: ${{ secrets.TOKEN }}
+
+      - name: Upload release assets
+        if: env.need_update == 1
+        uses: CaptainThrowback/action-gh-release@master
+        env:
+          GITHUB_TOKEN: ${{ secrets.TOKEN }}
+        with:
+          body_path: versions.txt
+          tag_name: "${{ env.latest_version }}_${{ matrix.model }}"
+          name: "${{ env.latest_version }} - ${{ matrix.model }}"
+          files: |
+            ./NcX_${{ env.latest_version }}-${{ matrix.model }}.zip.001
+            ./NcX_${{ env.latest_version }}-${{ matrix.model }}.zip.002
+            ./NcX_${{ env.latest_version }}-${{ matrix.model }}.zip.003
+            ./NcX_${{ env.latest_version }}-${{ matrix.model }}.zip.004
