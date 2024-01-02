@@ -30,7 +30,7 @@ jobs:
         with:
           repository: ShaDisNX255/NcX_OnUpdate
           path: NcX
-          ref: main
+          ref: fourteen
 
       - name: Install dependencies
         if: env.need_update == 1
